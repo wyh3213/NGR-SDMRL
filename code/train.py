@@ -25,7 +25,7 @@ from utils import (
     plot_auc_curves,
     plot_prc_curves,
 )
-from model import GANIB
+from model import NGR_SDMRL
 from morl_rl_clean import MORLPPOTrainer, ObjectiveSpec
 from metric import cv_model_evaluate
 
@@ -59,7 +59,7 @@ class EdgeSupervisionState:
     """
     Stores the currently sampled training edges for one epoch, and exposes
     masked supervised loss / MORL reward functions that operate on the full
-    prediction matrix produced by GANIB.
+    prediction matrix produced by NGR_SDMRL.
     """
 
     def __init__(self, device, reward_threshold=0.5, reward_k=0, eps=1e-8):
@@ -374,7 +374,7 @@ tprs = []
 precisions = []
 recalls = []
 
-print("seed=%d, evaluating metabolite-disease with GANIB + MORL + SNN + TSSD..." % args.seed)
+print("seed=%d, evaluating metabolite-disease with NGR_SDMRL + MORL + SNN + TSSD..." % args.seed)
 
 for k in range(k_folds):
     print("------this is %dth cross validation------" % (k + 1))
@@ -414,7 +414,7 @@ for k in range(k_folds):
     processed_features = re_features(or_adj, features, args.hops).to(device)
 
 
-    model = GANIB(
+    model = NGR_SDMRL(
         hops=args.hops,
         output_dim=args.node_output,
         input_dim=features.shape[1],
@@ -648,7 +648,7 @@ total_time = end_time - start_time
 minutes = int(total_time / 60)
 seconds = total_time - minutes * 60
 
-with open("../result/GANIB.txt", mode="a+", encoding="utf-8") as file:
+with open("../result/NGR_SDMRL.txt", mode="a+", encoding="utf-8") as file:
     file.write(f"Start time: {start_str}\n")
     file.write(f"args:{args}\n")
     file.write(f"Acc:{acc_result}\n")
