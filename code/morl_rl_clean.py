@@ -163,7 +163,7 @@ class DynamicWeightController:
 
 class MORLPPOTrainer:
     """
-    Stable PPO-style MORL trainer for GANIB.
+    Stable PPO-style MORL trainer
     """
     def __init__(
         self,
