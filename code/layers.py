@@ -20,7 +20,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 # ====================================================================
-# Residual Graph Convolutional Coding Layer (原有)
+# Residual Graph Convolutional Coding Layer
 # ====================================================================
 class GCN2Conv(MessagePassing):
     _cached_edge_index: Optional[Tuple[Tensor, Tensor]]
@@ -70,7 +70,7 @@ class GCN2Conv(MessagePassing):
             if isinstance(edge_index, Tensor):
                 cache = self._cached_edge_index
                 if cache is None:
-                    edge_index, edge_weight = gcn_norm(  # yapf: disable
+                    edge_index, edge_weight = gcn_norm( 
                         edge_index, edge_weight, x.size(self.node_dim), False,
                         self.add_self_loops, self.flow, dtype=x.dtype)
                     if self.cached:
@@ -81,7 +81,7 @@ class GCN2Conv(MessagePassing):
             elif isinstance(edge_index, SparseTensor):
                 cache = self._cached_adj_t
                 if cache is None:
-                    edge_index = gcn_norm(  # yapf: disable
+                    edge_index = gcn_norm(  
                         edge_index, edge_weight, x.size(self.node_dim), False,
                         self.add_self_loops, self.flow, dtype=x.dtype)
                     if self.cached:
@@ -89,7 +89,7 @@ class GCN2Conv(MessagePassing):
                 else:
                     edge_index = cache
 
-        # propagate_type: (x: Tensor, edge_weight: OptTensor)
+
         x = self.propagate(edge_index, x=x, edge_weight=edge_weight, size=None)
 
         x.mul_(1 - self.alpha)
@@ -162,7 +162,7 @@ class AttentionTSSA(nn.Module):
         w_normed = torch.nn.functional.normalize(w, dim=-2)
         w_sq = w_normed ** 2
 
-        # Pi from Eq. 10 in the paper
+
         Pi = self.attend(torch.sum(w_sq, dim=-1) * self.temp)  # b * h * n
 
         dots = torch.matmul((Pi / (Pi.sum(dim=-1, keepdim=True) + 1e-8)).unsqueeze(-2), w ** 2)
@@ -326,20 +326,9 @@ class InnerProductDecoder(nn.Module):
 
 
 # ====================================================================
-# 新增: 脉冲神经网络 (SNN) 组件
-# 参考: TSSD (Temporal-Spatial Self-Distillation) 论文
+# SNN
 # ====================================================================
-
 class SurrogateSpike(torch.autograd.Function):
-    """
-    矩形代理梯度函数 (Rectangular Surrogate Gradient)
-
-    前向传播: 阶跃函数 (膜电位 >= 阈值 → 发放脉冲)
-    反向传播: 矩形窗口近似梯度, 对应 TSSD 论文 Eq. (4)
-
-    ∂S/∂H ≈ (1/a) * sign(|H - ϑ| < a/2)
-    """
-
     @staticmethod
     def forward(ctx, membrane, threshold):
         ctx.save_for_backward(membrane)
@@ -350,24 +339,12 @@ class SurrogateSpike(torch.autograd.Function):
     def backward(ctx, grad_output):
         membrane, = ctx.saved_tensors
         threshold = ctx.threshold
-        # a = 1.0, 对应论文中的矩形窗口宽度
         grad = (torch.abs(membrane - threshold) < 0.5).float()
         return grad * grad_output, None
 
 
 class LIFNeuron(nn.Module):
-    """
-    离散 Leaky Integrate-and-Fire (LIF) 神经元
-
-    对应 TSSD 论文 Eq. (1)-(3):
-      H(t) = (1 - 1/τ) * H(t-1) + I(t)     # 膜电位积分
-      S(t) = Θ(H(t) - ϑ)                     # 脉冲发放
-      H(t) = H(t) - S(t) * ϑ                 # 软重置
-
-    Args:
-        tau: 膜电位时间常数 τ, 控制泄漏速率
-        threshold: 发放阈值 ϑ
-    """
+   
 
     def __init__(self, tau: float = 2.0, threshold: float = 1.0):
         super().__init__()
@@ -375,43 +352,19 @@ class LIFNeuron(nn.Module):
         self.threshold = threshold
 
     def forward(self, x: Tensor, mem: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
-        """
-        Args:
-            x: 输入电流 I(t), shape (N, dim)
-            mem: 上一时刻膜电位 H(t-1), 若为 None 则初始化为零
-        Returns:
-            spike: 脉冲输出 S(t), shape (N, dim), 取值 {0, 1}
-            mem: 重置后的膜电位 H(t), shape (N, dim)
-        """
+       
         if mem is None:
             mem = torch.zeros_like(x)
-        # Eq. (1): 膜电位积分 (泄漏 + 输入)
         mem = (1.0 - 1.0 / self.tau) * mem + x
-        # Eq. (2): 使用代理梯度的脉冲发放
+       
         spike = SurrogateSpike.apply(mem, self.threshold)
-        # Eq. (3): 软重置
+       
         mem = mem - spike * self.threshold
         return spike, mem
 
 
 class SpikingEncoder(nn.Module):
-    """
-    脉冲时序编码器 — 将 GCN-II 的静态图特征转化为脉冲时序表示
-
-    核心思路: GCN-II 输出作为"输入电流"送入 LIF 神经元, 运行 T 个时间步,
-    不同输入幅值的神经元会以不同速率发放脉冲, 产生率编码 (rate coding) 表示.
-    最终输出为 T 个时间步脉冲的平均值.
-
-    该编码器使时间自蒸馏 (TSD) 成为可能:
-    - T_t 步 (更多步) 的输出更稳定 → 作为"教师"
-    - T_s 步 (更少步) 的输出方差更大 → 作为"学生"
-
-    Args:
-        dim: 输入/输出特征维度
-        tau: LIF 时间常数
-        threshold: LIF 发放阈值
-        dropout: Dropout 比率
-    """
+   
 
     def __init__(self, dim: int, tau: float = 2.0, threshold: float = 1.0,
                  dropout: float = 0.1):
@@ -423,50 +376,25 @@ class SpikingEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: Tensor, T: int = 4) -> Tensor:
-        """
-        Args:
-            x: GCN-II 输出, shape (N, dim)
-            T: 模拟时间步数
-        Returns:
-            脉冲编码后的特征, shape (N, dim), 包含残差连接
-        """
+       
         x_input = self.spike_bn(self.spike_proj(x))
 
-        # 运行 T 个时间步, 收集脉冲输出
+    
         spike_outputs = []
         mem = torch.zeros_like(x_input)
         for t in range(T):
             spike, mem = self.lif(x_input, mem)
             spike_outputs.append(spike)
 
-        # 时间维度平均 → 率编码表示
+
         avg_spike = torch.stack(spike_outputs, dim=0).mean(dim=0)
 
-        # 投影 + 残差连接 (保留原始图特征信息)
+
         out = self.dropout(self.output_proj(avg_spike))
         return out + x
 
 
 class WeakDecoder(nn.Module):
-    """
-    空间自蒸馏 (SSD) 的弱解码器
-
-    对应 TSSD 论文 Section 3.3:
-    在骨干网络中间插入一个轻量级弱分类器, 它基于骨干特征直接做预测.
-    最终模型的完整预测作为"教师"指导弱解码器的"学生"预测.
-
-    关键设计:
-    - 仅在训练时使用, 推理时丢弃, 不影响推理效率
-    - 蒸馏梯度只回传到骨干网络 (GCN-II + Transformer), 不影响 Policy Head
-    - 缩短了梯度传播路径, 缓解深层 GCN-II (20层) 的梯度消失
-
-    Args:
-        input_dim: 骨干输出的融合特征维度 (fused_dim)
-        hidden_dim: 弱解码器的隐藏层维度
-        output_dim: 节点嵌入维度 (与 InnerProductDecoder 兼容)
-        num_dis: 疾病数量
-        dropout: Dropout 比率
-    """
 
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int,
                  num_dis: int, dropout: float = 0.1):
@@ -479,17 +407,11 @@ class WeakDecoder(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, output_dim),
         )
-        # 轻量级内积解码器
         self.weight = nn.Parameter(torch.empty(output_dim, output_dim))
         nn.init.xavier_uniform_(self.weight, gain=1.414)
 
     def forward(self, residual: Tensor) -> Tensor:
-        """
-        Args:
-            residual: 骨干网络输出, shape (num_dis + num_meta, fused_dim)
-        Returns:
-            弱预测矩阵, shape (num_meta, num_dis)
-        """
+        
         embeddings = self.fc(residual)
         embeddings = F.dropout(embeddings, p=0.1, training=self.training)
         dis_emb = embeddings[:self.num_dis, :]
