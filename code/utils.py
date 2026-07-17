@@ -39,7 +39,7 @@ def load_data(seed, n_components):
 
     # Disease similarity matrix and its network construction
     Dis_simi = pd.read_csv('../data1/disease_similarity_network.csv', header=0)
-    Dis_adj = np.where(Dis_simi > 0.4, 1, 0)  # Formula (11) in the paper
+    Dis_adj = np.where(Dis_simi > 0.4, 1, 0) 
     count_ones_disease = np.count_nonzero(Dis_adj)
     print("Dis_adj 中值为 1 的元素个数:", count_ones_disease)
     Dis_adj = torch.tensor(Dis_adj).to(device)
@@ -101,12 +101,12 @@ def laplacian_positional_encoding(adj, pe_dim):
 
 # The multi-hop neighbor aggregation
 def re_features(adj, features, K):
-    # size = (N, 1, K+1, d )
+
     nodes_features = torch.empty(features.shape[0], 1, K+1, features.shape[1])
     for i in range(features.shape[0]):
         nodes_features[i, 0, 0, :] = features[i]
     x = features + torch.zeros_like(features)
-    # x = x.double()
+
 
     x = x.to(adj.dtype)
     for i in range(K):
@@ -114,7 +114,7 @@ def re_features(adj, features, K):
         for index in range(features.shape[0]):
             nodes_features[index, 0, i + 1, :] = x[index]
     nodes_features = nodes_features.squeeze()
-    # return (N, hops+1, d)
+
     return nodes_features
 
 
