@@ -94,22 +94,7 @@ class DyReLU(nn.Module):
         return x * self.gamma + self.beta
 
 
-class GANIB(nn.Module):
-    """
-    GANIB model with PPO/MORL integration + Spiking Neural Network + Self-Distillation.
-
-    Backbone:
-        - Residual Graph Convolution (GCN-II) for disease / metabolite similarity networks
-        - Spiking Encoder: LIF 神经元对图特征进行脉冲时序编码 (新增)
-        - Graph Transformer encoder with neighbor attention aggregation
-    Self-Distillation (新增):
-        - Temporal Self-Distillation (TSD): T_t 步脉冲输出指导 T_s 步输出
-        - Spatial Self-Distillation (SSD): 最终预测指导弱解码器中间预测
-    Policy:
-        - Gaussian policy head for latent-space exploration (PPO)
-    Decoder:
-        - Dual-MLP gating + inner-product decoder
-    """
+class NGR_SDMRL(nn.Module):
 
     def __init__(
             self,
@@ -157,24 +142,24 @@ class GANIB(nn.Module):
         self.policy_dim = max(int(policy_dim), self.fused_dim)
         self.decoder_hidden_dim = max(int(decoder_hidden_dim), self.output_dim)
 
-        # ---- SNN 时间步参数 ----
+       
         self.snn_T_s = snn_T_s
         self.snn_T_t = snn_T_t
         self.enable_distillation = enable_distillation
 
-        # ---- Graph input projection ----
+        
         if self.graph_input_dim == self.graph_hidden_dim:
             self.graph_input_proj = nn.Identity()
         else:
             self.graph_input_proj = nn.Linear(self.graph_input_dim, self.graph_hidden_dim)
 
-        # ---- Residual Graph Convolution (GCN-II) ----
+    
         self.convs = nn.ModuleList([
             GCN2Conv(channels=self.graph_hidden_dim, alpha=0.1, theta=1, layer=i + 1)
             for i in range(self.GCNII_layers)
         ])
 
-        # ---- 新增: 脉冲编码器 (Spiking Encoder) ----
+    
         self.spiking_encoder = SpikingEncoder(
             dim=self.graph_hidden_dim,
             tau=snn_tau,
@@ -182,7 +167,7 @@ class GANIB(nn.Module):
             dropout=self.dropout_rate,
         )
 
-        # ---- Graph Transformer Encoder ----
+      
         self.att_embeddings_nope = nn.Linear(self.input_dim, self.hidden_dim)
         self.layers = nn.ModuleList([
             EncoderLayer(self.hidden_dim, self.ffn_dim, self.dropout_rate, self.num_heads)
@@ -191,7 +176,7 @@ class GANIB(nn.Module):
         self.final_ln = nn.LayerNorm(self.hidden_dim)
         self.attn_layer = nn.Linear(2 * self.hidden_dim, 1)
 
-        # ---- Dual-MLP gating decoder ----
+      
         self.g1a = DyReLU(self.policy_dim, 1.0)
         self.g1b = DyReLU(self.policy_dim, 1.0)
 
@@ -214,12 +199,12 @@ class GANIB(nn.Module):
 
         self.decoder = InnerProductDecoder(self.output_dim, self.dropout_rate, self.num_dis)
 
-        # ---- Policy head (PPO/MORL) ----
+       
         self.policy_proj = nn.Linear(self.fused_dim, self.policy_dim)
         self.policy_head = GaussianPolicyHead(input_dim=self.policy_dim, latent_dim=self.policy_dim)
         self.residual_proj = nn.Linear(self.policy_dim, self.fused_dim)
 
-        # ---- 新增: 弱解码器 (Spatial Self-Distillation) ----
+       
         if self.enable_distillation:
             self.weak_decoder = WeakDecoder(
                 input_dim=self.fused_dim,
@@ -233,14 +218,9 @@ class GANIB(nn.Module):
 
         self.apply(lambda module: init_params(module, n_layers=self.graphformer_layers))
 
-    # ------------------------------------------------------------------
-    # Backbone encoding
-    # ------------------------------------------------------------------
+  
     def _gcnii_forward(self, dis_data, meta_data) -> Tensor:
-        """
-        纯 GCN-II 前向传播 (不含脉冲编码)
-        返回拼接后的疾病+代谢物图特征, shape (num_dis + num_meta, graph_hidden_dim)
-        """
+       
         x_0_dis = self.graph_input_proj(dis_data.x)
         x_dis = x_0_dis
         for conv in self.convs:
@@ -254,14 +234,7 @@ class GANIB(nn.Module):
         return torch.cat((x_dis, x_meta), dim=0)
 
     def _encode_graph_branch(self, dis_data, meta_data, T: Optional[int] = None) -> Tensor:
-        """
-        图分支编码: GCN-II → SpikingEncoder
-
-        Args:
-            T: 脉冲模拟时间步, 默认使用 T_s
-        Returns:
-            脉冲编码后的图特征, shape (num_dis + num_meta, graph_hidden_dim)
-        """
+       
         if T is None:
             T = self.snn_T_s
         graph_raw = self._gcnii_forward(dis_data, meta_data)
@@ -281,17 +254,12 @@ class GANIB(nn.Module):
         return (node_tensor + neighbor_tensor).squeeze(1)
 
     def encode_backbone(self, processed_features, dis_data, meta_data) -> Tensor:
-        """
-        骨干编码 (MORL 和推理使用, 默认 T_s 时间步)
-        返回 shape (num_dis + num_meta, fused_dim)
-        """
+       
         x_gcnii = self._encode_graph_branch(dis_data, meta_data, T=self.snn_T_s)
         x_former = self._encode_transformer_branch(processed_features)
         return torch.cat((x_gcnii, x_former), dim=1)
 
-    # ------------------------------------------------------------------
-    # 新增: 自蒸馏前向传播
-    # ------------------------------------------------------------------
+ 
     def distillation_forward(
             self,
             processed_features,
@@ -300,46 +268,29 @@ class GANIB(nn.Module):
             T_student: Optional[int] = None,
             T_teacher: Optional[int] = None,
     ) -> dict:
-        """
-        自蒸馏前向传播 — 计算 TSD 和 SSD 所需的所有输出
-
-        设计要点:
-        1. GCN-II 只前向传播一次, SpikingEncoder 运行两次 (T_s 和 T_t)
-        2. 教师信号全部 detach, 梯度不回传到 Policy Head
-        3. 学生信号的梯度只更新骨干网络 + SpikingEncoder + WeakDecoder
-
-        Returns:
-            dict with keys:
-                - graph_student: T_s 步脉冲图特征 (有梯度)
-                - graph_teacher: T_t 步脉冲图特征 (无梯度)
-                - y_weak: 弱解码器预测 (有梯度)
-                - y_teacher: 完整模型确定性预测 (无梯度)
-        """
+        
         if T_student is None:
             T_student = self.snn_T_s
         if T_teacher is None:
             T_teacher = self.snn_T_t
 
-        # 1. GCN-II 前向 (计算一次, 共享给学生和教师)
+       
         graph_raw = self._gcnii_forward(dis_data, meta_data)
 
-        # 2. 学生脉冲编码 (T_student 步, 保留梯度)
         graph_student = self.spiking_encoder(graph_raw, T=T_student)
 
-        # 3. 教师脉冲编码 (T_teacher 步, 无梯度)
         with torch.no_grad():
             graph_teacher = self.spiking_encoder(graph_raw, T=T_teacher)
 
-        # 4. 组装学生骨干输出
+        
         x_former = self._encode_transformer_branch(processed_features)
         residual_student = torch.cat((graph_student, x_former), dim=1)
 
-        # 5. 弱解码器预测 (SSD 学生, 保留梯度)
+    
         y_weak = None
         if self.weak_decoder is not None:
             y_weak = self.weak_decoder(residual_student)
 
-        # 6. 完整模型确定性预测 (SSD 教师, 无梯度)
         with torch.no_grad():
             policy_input = self.build_policy_input(residual_student)
             latent, _, _ = self.policy_head.sample_mean(policy_input)
@@ -363,30 +314,16 @@ class GANIB(nn.Module):
             T_student: Optional[int] = None,
             T_teacher: Optional[int] = None,
     ) -> Tuple[Tensor, dict]:
-        """
-        计算自蒸馏损失
-
-        L_distill = α * L_tsd + β * L_ssd
-
-        其中:
-            L_tsd = ||graph_student - sg(graph_teacher)||²   (时间自蒸馏)
-            L_ssd = ||y_weak - sg(y_teacher)||²               (空间自蒸馏)
-
-        sg(·) 表示 stop-gradient, 确保梯度不流过教师路径
-
-        Returns:
-            total_distill_loss: 标量损失
-            stats: 各项损失的详细数值
-        """
+       
         outputs = self.distillation_forward(
             processed_features, dis_data, meta_data,
             T_student=T_student, T_teacher=T_teacher,
         )
 
-        # TSD: 时间自蒸馏损失
+      
         loss_tsd = F.mse_loss(outputs["graph_student"], outputs["graph_teacher"].detach())
 
-        # SSD: 空间自蒸馏损失
+      
         loss_ssd = torch.tensor(0.0, device=outputs["graph_student"].device)
         if outputs["y_weak"] is not None and outputs["y_teacher"] is not None:
             loss_ssd = F.mse_loss(outputs["y_weak"], outputs["y_teacher"].detach())
@@ -401,7 +338,7 @@ class GANIB(nn.Module):
         return total_loss, stats
 
     # ------------------------------------------------------------------
-    # Policy interface (for MORL trainer) — 保持不变
+    # Policy interface
     # ------------------------------------------------------------------
     def build_policy_input(self, residual: Tensor) -> Tensor:
         return self.policy_proj(residual)
@@ -432,9 +369,7 @@ class GANIB(nn.Module):
         x1 = self.decoder(embeddings)
         return x1, hidden, embeddings
 
-    # ------------------------------------------------------------------
-    # Forward variants — 保持不变
-    # ------------------------------------------------------------------
+    
     def forward_from_encoded(
             self,
             residual: Tensor,
@@ -489,9 +424,7 @@ class GANIB(nn.Module):
             rl_std_scale=rl_std_scale,
         )
 
-    # ------------------------------------------------------------------
-    # Deterministic inference — 保持不变
-    # ------------------------------------------------------------------
+
     @torch.no_grad()
     def predict_from_encoded(
             self,
