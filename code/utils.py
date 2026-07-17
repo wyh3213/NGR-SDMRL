@@ -46,7 +46,7 @@ def load_data(seed, n_components):
 
     # Metabolite similarity matrix and its network construction
     Meta_simi = pd.read_csv('../data1/metabolite_similarity_network.csv', header=0)
-    Meta_adj = np.where(Meta_simi > 0.4, 1, 0) # Formula (12) in the paper
+    Meta_adj = np.where(Meta_simi > 0.4, 1, 0) 
     count_ones_meta = np.count_nonzero(Meta_adj)
     print("Meta_adj 中值为 1 的元素个数:", count_ones_meta)
     Meta_adj = torch.tensor(Meta_adj).to(device)
@@ -57,32 +57,6 @@ def load_data(seed, n_components):
     with open("../result/GANIB.txt", mode="a+", encoding="utf-8") as file:
         file.write(f"data1:")
 
-
-
-    # # Disease-metabolite association matrix
-    # Adj = pd.read_csv('../data2/association_matrix.csv', header=0)
-    # count_ones = np.count_nonzero(Adj == 1)
-    # print("元素为1的个数：", count_ones)
-    #
-    # # Disease similarity matrix and its network construction
-    # Dis_simi = pd.read_csv('../data2/disease_similarity_network.csv', header=0)
-    # Dis_adj = np.where(Dis_simi > 0.4, 1, 0)  # Formula (11) in the paper
-    # count_ones_disease = np.count_nonzero(Dis_adj)
-    # print("Dis_adj 中值为 1 的元素个数:", count_ones_disease)
-    # Dis_adj = torch.tensor(Dis_adj).to(device)
-    #
-    # # Metabolite similarity matrix and its network construction
-    # Meta_simi = pd.read_csv('../data2/metabolite_similarity_network.csv', header=0)
-    # Meta_adj = np.where(Meta_simi > 0.4, 1, 0)  # Formula (12) in the paper
-    # count_ones_meta = np.count_nonzero(Meta_adj)
-    # print("Meta_adj 中值为 1 的元素个数:", count_ones_meta)
-    # Meta_adj = torch.tensor(Meta_adj).to(device)
-    #
-    # # Initial biochemical feature of disease and metabolites
-    # Dis_MESH2vec = pd.read_csv('../data2/MeSHHeading2vec.csv', header=0)
-    # Meta_mol2vec = pd.read_csv('../data2/metabolite_mol2vec.csv', header=0)
-    # with open("../result/GANIB.txt", mode="a+", encoding="utf-8") as file:
-    #     file.write(f"data2:")
 
 
 
@@ -115,7 +89,7 @@ def load_data(seed, n_components):
 
 # laplacian_positional_encoding builds the structure matrix 
 def laplacian_positional_encoding(adj, pe_dim):
-    N = torch.diag(torch.pow(torch.sum(adj, dim=1).clamp(min=1), -0.5))  # 归一化矩阵N
+    N = torch.diag(torch.pow(torch.sum(adj, dim=1).clamp(min=1), -0.5))  
     L = torch.eye(adj.shape[0]).to(device) - N @ adj @ N
     EigVal, EigVec = torch.linalg.eig(L)
     EigVal = EigVal.real
@@ -136,7 +110,7 @@ def re_features(adj, features, K):
 
     x = x.to(adj.dtype)
     for i in range(K):
-        x = torch.matmul(adj, x)  # Equation (20)
+        x = torch.matmul(adj, x)  
         for index in range(features.shape[0]):
             nodes_features[index, 0, i + 1, :] = x[index]
     nodes_features = nodes_features.squeeze()
@@ -231,7 +205,7 @@ def plot_prc_curves(precisions, recalls, prc, directory, name):
     mean_prc = np.mean(prc)
     prc_std = np.std(prc)
     plt.plot(mean_recall, mean_precision, color='BlueViolet', alpha=0.9,
-             label='Mean AUPR: %.4f $\pm$ %.4f' % (mean_prc, prc_std))  # AP: Average Precision
+             label='Mean AUPR: %.4f $\pm$ %.4f' % (mean_prc, prc_std)) 
 
     plt.plot([1, 0], [0, 1], linestyle='--', color='black', alpha=0.4)
 
