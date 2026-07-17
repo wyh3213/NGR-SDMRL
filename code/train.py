@@ -178,9 +178,6 @@ def build_morl_trainer(model, optimizer, scheduler, edge_state, args, device):
     )
 
 
-# ====================================================================
-# 新增: 自蒸馏训练步骤
-# ====================================================================
 def distillation_step(
         model,
         distill_optimizer,
@@ -193,17 +190,7 @@ def distillation_step(
         T_student: int = None,
         T_teacher: int = None,
 ) -> dict:
-    """
-    执行一步自蒸馏更新 (在 MORL 步之后调用)
-
-    设计要点:
-    - 使用独立的 distill_optimizer, 仅覆盖骨干网络 + SpikingEncoder + WeakDecoder
-    - 教师信号全部 detach, Policy Head 不受影响
-    - 学习率远小于 MORL 优化器, 避免干扰 RL 训练
-
-    对应 TSSD 论文 Eq. (11):
-        L_total = α * L_tsd + β * L_ssd
-    """
+   
     model.train()
 
     distill_optimizer.zero_grad(set_to_none=True)
@@ -229,29 +216,22 @@ def distillation_step(
 
 
 def build_distill_optimizer(model, lr: float = 5e-4, weight_decay: float = 1e-4):
-    """
-    构建自蒸馏专用优化器
-
-    只包含骨干网络 + SpikingEncoder + WeakDecoder 的参数
-    不包含 Policy Head, 确保 MORL 的探索机制不受蒸馏影响
-    """
+   
     distill_params = []
 
-    # 骨干: GCN-II 图分支
     distill_params += list(model.convs.parameters())
     if hasattr(model.graph_input_proj, 'parameters'):
         distill_params += list(model.graph_input_proj.parameters())
 
-    # 骨干: Transformer 分支
     distill_params += list(model.att_embeddings_nope.parameters())
     distill_params += list(model.layers.parameters())
     distill_params += list(model.final_ln.parameters())
     distill_params += list(model.attn_layer.parameters())
 
-    # 脉冲编码器
+
     distill_params += list(model.spiking_encoder.parameters())
 
-    # 弱解码器
+
     if model.weak_decoder is not None:
         distill_params += list(model.weak_decoder.parameters())
 
@@ -291,9 +271,7 @@ def evaluate_fold(model, processed_features, dis_data, meta_data, Adj, val_pos_e
     }
 
 
-# ===========================================================================
-# Main training script
-# ===========================================================================
+
 
 start_time = time.time()
 start_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))
@@ -315,24 +293,24 @@ parser.add_argument("--end_lr", type=float, default=0.0001, help="Final learning
 # Original model parameters
 parser.add_argument("--pe_dim", type=int, default=15, help="Position embedding size.")
 parser.add_argument("--hops", type=int, default=7, help="Hop of neighbors to be calculated.")
-parser.add_argument("--graphformer_layers", type=int, default=1, help="Number of Graphormer layers.")           # 1
+parser.add_argument("--graphformer_layers", type=int, default=1, help="Number of Graphormer layers.")         
 parser.add_argument("--n_heads", type=int, default=8, help="Number of attention heads.")
 parser.add_argument("--node_input", type=int, default=64, help="Input dimensions of node features / PCA.")
 parser.add_argument("--node_hidden", type=int, default=128, help="Hidden dimensions of node features.")
 parser.add_argument("--node_output", type=int, default=64, help="Output dimensions of node features.")
 parser.add_argument("--ffn_dim", type=int, default=256, help="FFN layer size.")
-parser.add_argument("--GCNII_layers", type=int, default=20, help="Number of GCNII layers.")                     #20
+parser.add_argument("--GCNII_layers", type=int, default=20, help="Number of GCNII layers.")                   
 
 # MORL / PPO parameters
 parser.add_argument("--ppo_epochs", type=int, default=4, help="Number of PPO update passes per epoch.")
 parser.add_argument("--ppo_rollouts", type=int, default=8, help="Number of stochastic rollouts collected per epoch.")
 parser.add_argument("--ppo_clip", type=float, default=0.2, help="PPO clipping epsilon.")
 parser.add_argument("--supervised_coef", type=float, default=1.0, help="Weight of masked BCE loss.")
-parser.add_argument("--rl_coef", type=float, default=0.2 , help="Weight of PPO policy loss.")                    #rl_coef 0.2
+parser.add_argument("--rl_coef", type=float, default=0.2 , help="Weight of PPO policy loss.")                  
 parser.add_argument("--entropy_coef", type=float, default=1e-3, help="Entropy bonus weight.")
 parser.add_argument("--kl_coef", type=float, default=1e-3, help="KL penalty weight.")
 parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Gradient clipping norm.")
-parser.add_argument("--rl_std_scale", type=float, default=1.25,                                                   # 1.25
+parser.add_argument("--rl_std_scale", type=float, default=1.25,                                                
                     help="Exploration scale for policy std during rollouts.")
 parser.add_argument("--disable_dynamic_weight", action="store_true", help="Disable dynamic objective weighting.")
 parser.add_argument("--disable_reward_norm", action="store_true", help="Disable objective-wise reward normalization.")
@@ -345,35 +323,31 @@ parser.add_argument("--reward_w_f1", type=float, default=0.40, help="Weight prio
 parser.add_argument("--reward_w_recall", type=float, default=0.35, help="Weight prior for Recall@K reward.")
 parser.add_argument("--reward_w_bce", type=float, default=0.25, help="Weight prior for negative BCE reward.")
 
-# ====================================================================
-# 新增: SNN (脉冲神经网络) 参数
-# ====================================================================
-parser.add_argument("--snn_T_s", type=int, default=4,                                           # 4
-                    help="SNN 推理/学生时间步 T_s (对应 TSSD 论文的 inference timestep)")
-parser.add_argument("--snn_T_t", type=int, default=8,
-                    help="SNN 教师时间步 T_t (对应 TSSD 论文的 training timestep, 建议 T_t = 2*T_s)")
-parser.add_argument("--snn_tau", type=float, default=2.0,
-                    help="LIF 神经元膜电位时间常数 τ")
-parser.add_argument("--snn_threshold", type=float, default=1.0,
-                    help="LIF 神经元发放阈值 ϑ")
 
-# ====================================================================
-# 新增: 自蒸馏 (Self-Distillation) 参数
-# ====================================================================
-parser.add_argument("--alpha_tsd", type=float, default=1.0,                                     # 1.0
-                    help="TSD (时间自蒸馏) 损失权重 α, 对应论文 Eq. (8)")
-parser.add_argument("--beta_ssd", type=float, default=1.0,                                      #1.0
-                    help="SSD (空间自蒸馏) 损失权重 β, 对应论文 Eq. (10)")
+parser.add_argument("--snn_T_s", type=int, default=4,                               
+                    help="SNN T_s")
+parser.add_argument("--snn_T_t", type=int, default=8,
+                    help="SNN T_t")
+parser.add_argument("--snn_tau", type=float, default=2.0,
+                    help="LIF_τ")
+parser.add_argument("--snn_threshold", type=float, default=1.0,
+                    help="LIF_ϑ")
+
+
+parser.add_argument("--alpha_tsd", type=float, default=1.0,                                    
+                    help="TSD  α")
+parser.add_argument("--beta_ssd", type=float, default=1.0,                                     
+                    help="SSD_β")
 parser.add_argument("--distill_lr", type=float, default=5e-4,
-                    help="自蒸馏优化器学习率 (应小于 MORL 的 peak_lr)")
+                    help="Self distillation optimizer learning rate")
 parser.add_argument("--distill_weight_decay", type=float, default=1e-4,
-                    help="自蒸馏优化器权重衰减")
+                    help="Self distillation optimizer weight attenuation")
 parser.add_argument("--disable_distillation", action="store_true",
-                    help="完全禁用自蒸馏 (退回到纯 MORL 训练, 但保留 SNN 编码)")
+                    help="Completely disable self distillation")
 parser.add_argument("--distill_warmup", type=int, default=50,
-                    help="自蒸馏预热轮数: 前 N 轮不进行蒸馏, 等待骨干网络稳定")
+                    help="Number of self distillation preheating rounds")
 parser.add_argument("--stochastic_latency", action="store_true",
-                    help="启用随机延迟训练: 随机采样 T_student, 减少训练开销 (对应 TSSD 论文)")
+                    help="Enable random delay training")
 
 args, unknown = parser.parse_known_args()
 print("args", args)
@@ -439,9 +413,7 @@ for k in range(k_folds):
 
     processed_features = re_features(or_adj, features, args.hops).to(device)
 
-    # ================================================================
-    # 模型创建 (新增 SNN 和自蒸馏参数)
-    # ================================================================
+
     model = GANIB(
         hops=args.hops,
         output_dim=args.node_output,
@@ -469,9 +441,7 @@ for k in range(k_folds):
     weak_dec_params = sum(p.numel() for p in model.weak_decoder.parameters()) if model.weak_decoder else 0
     print(f"total params: {total_params} (spiking_encoder: {spiking_params}, weak_decoder: {weak_dec_params})")
 
-    # ================================================================
-    # 优化器设置
-    # ================================================================
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.peak_lr, weight_decay=args.weight_decay)
 
     effective_tot_updates = args.tot_updates
@@ -488,7 +458,7 @@ for k in range(k_folds):
         power=1.0,
     )
 
-    # 新增: 自蒸馏专用优化器
+
     distill_optimizer = build_distill_optimizer(
         model, lr=args.distill_lr, weight_decay=args.distill_weight_decay
     )
@@ -536,9 +506,7 @@ for k in range(k_folds):
             num_dis=Adj.shape[1],
         )
 
-        # ============================================================
-        # Step 1: MORL 训练步骤 (保持不变)
-        # ============================================================
+      
         stats = trainer.train_step(
             processed_features=processed_features,
             dis_data=dis_data,
@@ -546,18 +514,16 @@ for k in range(k_folds):
             target=target_matrix,
         )
 
-        # ============================================================
-        # Step 2: 自蒸馏训练步骤 (新增)
-        # ============================================================
+  
         distill_stats = {"loss_tsd": 0.0, "loss_ssd": 0.0, "loss_distill_total": 0.0}
 
         do_distill = (
                 not args.disable_distillation
-                and epoch >= args.distill_warmup  # 预热后才启动蒸馏
+                and epoch >= args.distill_warmup  
         )
 
         if do_distill:
-            # 随机延迟训练 (stochastic latency, 对应 TSSD 论文)
+        
             if args.stochastic_latency:
                 T_student = random.randint(1, args.snn_T_s)
                 T_teacher = 2 * T_student
@@ -578,9 +544,7 @@ for k in range(k_folds):
                 T_teacher=T_teacher,
             )
 
-        # ============================================================
-        # 评估
-        # ============================================================
+    
         eval_stats = evaluate_fold(
             model=model,
             processed_features=processed_features,
@@ -604,7 +568,7 @@ for k in range(k_folds):
                       "PolicyLoss: %.4f" % stats["policy_loss"],
                       "Entropy: %.4f" % stats["entropy"],
                       "KL: %.4f" % stats["kl"],
-            # 新增: 蒸馏损失
+     
                       "TSD: %.4f" % distill_stats["loss_tsd"],
                       "SSD: %.4f" % distill_stats["loss_ssd"],
                       "Acc: %.4f" % metric_tmp[0],
